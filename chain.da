@@ -1,0 +1,84 @@
+import time
+
+class Replica(process):
+    def setup(neighbours, client, name):
+        self.predecessor = neighbours[0]
+        self.successor = neighbours[1]
+        self.name = name
+        self.history = []
+        self.client = client
+        self.terminate = 0
+        self.unverified = []
+        self.input_set = []
+        self.output_set = []
+
+    def run():
+        await(self.terminate == -1)
+            
+    def receive(msg=('newm', action), from_=sender):
+        if self.name == 'replica':
+            self.evaluate(action)
+            send(('newm', action), to=self.successor)
+            await(some(received(('ack', id)), has = id == self.successor))
+            output("Received ACK from ", self.successor, " will send ACK to ", self.predecessor)
+            send(('ack', self.id), to=self.predecessor)
+        elif self.name == 'head':
+            self.evaluate(action)
+            send(('newm', action), to=self.successor)
+            await(some(received(('ack', id)), has = id == self.successor))
+            output("Received ACK from the successor ", self.successor, " Will send the result to the client now ", self.client)
+            send(('result', self.history[-1], self.id), to = self.client)
+        elif self.name == 'tail':
+            self.evaluate(action)
+            output("Reached the tail. Sending it back now !!")
+            send(('ack', self.id), to = self.predecessor)
+            #send(('result', self.history[-1], self.id), to = self.client)
+    
+
+    def receive(msg=('ack', id), from_=sender):
+        pass
+
+    def evaluate(action):
+        op = action.split()
+        self.history.append(int(op[1])+int(op[2]))
+    
+class Client(process):
+    def setup(servers):
+	    pass
+
+    def run():
+        res=0
+        output("sending command from client to the head of the replicas")
+        output(self.servers[0])
+        send(('newm', 'add 1 3'), to=self.servers[0])
+        #await(some(received(('result', res, p)), has = p == servers[len(servers)-1]))
+        await(some(received(('result', res, p)), has = p == servers[0]))
+        output("Output received from the tail ", res)
+        send(('Done',), to=parent())
+
+    def receive(msg=('result', res, p), from_=sender):
+        output("received result ", res, " from ", sender)
+
+def main():
+    num_replicas = 7
+    num_clients = 1
+    servers = new(Replica, num=num_replicas)
+    clients = new(Client, num=num_clients)
+    
+    for s in range(0, len(servers)):
+        if s == 0:
+            setup(list(servers)[s], (("null", list(servers)[1]), list(clients)[0], "head"))
+        elif s == len(servers)-1:
+            setup(list(servers)[s], ((list(servers)[s-1], "null"), list(clients)[0], "tail"))
+        else:
+            setup(list(servers)[s], ((list(servers)[s-1], list(servers)[s+1]), list(clients)[0], "replica"))
+
+
+    setup(clients, (list(servers),))
+    start(servers)
+    output("Servers started !!")
+    output(servers)
+    start(clients)
+    output("Clients started !!")
+    await(received(('Done',)))
+    end(servers)
