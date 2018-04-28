@@ -1,0 +1,13 @@
+class P(process):
+    def setup(processes):
+        pass
+
+    def run():
+        for p in processes:
+            output(self.id, " says HELLO to process ", p)
+
+def main():
+    num_processes=2
+    ps = new(P, num=num_processes)
+    setup(ps, (ps,)) #sending the list of processes as an argument
+    start(ps)

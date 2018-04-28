@@ -1,0 +1,13 @@
+class P(process):
+    def setup(name):
+        pass
+
+    def run():
+        output("Printing the process name :", self.name, " and the process id ", self.id)
+
+
+def main():
+    num_processes = 2
+    ps = new(P, num=num_processes)
+    setup(ps, ('bob',))
+    start(ps)

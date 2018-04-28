@@ -1,0 +1,13 @@
+class P(process):
+    #this function is a must
+    def setup(name):
+        pass
+
+	#this function is also a must in order to start the process
+    def run():
+        output('Hello World from:', self.name, ', AKA:', self.id) #I guess every process has a unique ID
+
+def main():
+    ps = new(P)
+    setup(ps, ('bob',))
+    start(ps)

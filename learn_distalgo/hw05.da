@@ -1,0 +1,15 @@
+class P(process):
+    def setup(processes):
+        pass
+
+    def run():
+        for p in processes:
+            if p != self.id:
+                output(self.id, " says HELLO to ", p)
+
+
+def main():
+    num_processes=2
+    ps = new(P, num=num_processes)
+    setup(ps, (ps,))
+    start(ps)

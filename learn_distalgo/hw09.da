@@ -1,0 +1,19 @@
+class P(process):
+    def setup(processes):
+        pass
+
+    def run():
+        for p in processes:
+            send(('hello', self.id), to = p)
+        greeter = self.processes.pop() 
+        await(received(('hello', greeter)))
+
+    def receive(msg=('hello', id), from_ = greeter):
+        output(greeter, ' says Hello to', self.id)
+
+def main():
+    num_processes=3
+    ps = new(P, num=num_processes)
+    for p in ps:
+        setup(p, (ps - {p},))
+    start(ps)
