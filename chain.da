@@ -60,7 +60,13 @@ class Replica(process):
 
     def run():
         await(self.terminate == -1)
-           
+    
+    def receive(msg=('rshuttle', action, r, id), from_=sender):
+        if self.name == 'replica':
+            self.history[action] = [r["order_proof"], r["result_proof"], r["result"]]
+        elif self.name == 'head':
+            self.history[action] = [r["order_proof"], r["result_proof"], r["result"]]
+            
     def receive(msg=('fshuttle', action, l, id), from_=sender):
         if self.name == 'replica':
             res = self.evaluate(action)
@@ -70,6 +76,8 @@ class Replica(process):
             l["result_proof"].append(rproof)
             self.slot += 1
             send(('fshuttle', action, l, self.id), to=self.successor)
+            await(some(received(('rshuttle', action, r, id)), has = id == self.successor))
+            send(('rshuttle', action, r, self.id), to=self.predecessor)
         elif self.name == 'tail':
             res = self.evaluate(action)
             oproof = [self.slot, action, self.id]
@@ -82,15 +90,10 @@ class Replica(process):
             self.history[action] = [l["order_proof"], l["result_proof"], res]
             output("History ", self.history)
             output("Forward Shuttle till tail ", l)
+            send(('rshuttle', action, r, self.id), to=self.predecessor)
          
     def receive(msg=('newm', action), from_=sender):
-        if self.name == 'replica':
-            res = self.evaluate(action)
-            send(('newm', action), to=self.successor)
-            await(some(received(('ack', id)), has = id == self.successor))
-            output("Received ACK from ", self.successor, " will send ACK to ", self.predecessor)
-            send(('ack', self.id), to=self.predecessor)
-        elif self.name == 'head':
+        if self.name == 'head':
             res = self.evaluate(action)
             l = {"action": action, "order_proof":[], "result_proof":[]}
             oproof = [self.slot, action, self.id]
@@ -99,18 +102,9 @@ class Replica(process):
             l["result_proof"].append(rproof)
             self.slot += 1
             send(('fshuttle', action, l, self.id), to=self.successor)
-            #await(some(received(('ack', id)), has = id == self.successor))
-            #output("Received ACK from the successor ", self.successor, " Will send the result to the client now ", self.client)
-            #send(('result', self.history[-1], self.id), to = self.client)
-        elif self.name == 'tail':
-            res = self.evaluate(action)
-            output("Reached the tail. Sending it back now !!")
-            send(('ack', self.id), to = self.predecessor)
-            #send(('result', self.history[-1], self.id), to = self.client)
-    
-
-    def receive(msg=('ack', id), from_=sender):
-        pass
+            await(some(received(('rshuttle', action, r, id)), has = id == self.successor))
+            output("Received Result Proof from the successor ", self.successor, " Will not send the result proof to the client as the tail has already sent", self.client)
+            output("Result Proof as received by the head by it's successor   ", r)
 
     def evaluate(action):
         op = action.split()
@@ -139,7 +133,10 @@ class Replica(process):
                 self.bank_accounts[param].withdraw(float(op[2]))
                 res = "Withdrawal of " + op[2] + " from " + op[1] + " successful"
             return res
-            
+        elif op[0] == 'balance':
+            bal = self.bank_accounts[param].getBalance()
+            res = "Balance of account " + param + " is " + bal
+            return res    
    
 class Client(process):
     def setup(servers):
@@ -150,13 +147,12 @@ class Client(process):
         output("sending command from client to the head of the replicas")
         output(self.servers[0])
         send(('newm', 'create amith 250'), to=self.servers[0])
-        await(some(received(('result', res, p)), has = p == servers[len(servers)-1]))
-        #await(some(received(('result', res, p)), has = p == servers[0]))
-        output("Output received from the tail ", res)
-        send(('Done',), to=parent())
+        await(some(received(('result', res_proof, res, p)), has = p == servers[len(servers)-1]))
+        output("Result received from the tail ", res)
+        #send(('Done',), to=parent())
 
-    def receive(msg=('result', res, p), from_=sender):
-        output("received result ", res, " from ", sender)
+    def receive(msg=('result', res_proof, res, p), from_=sender):
+        output("Result Proof received from the tail ", res_proof)
 
 def generate_keys():
     private_key = ''.join(random.choices(string.ascii_letters + string.digits, k=5)) 
