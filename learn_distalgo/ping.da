@@ -1,0 +1,43 @@
+import sys
+import time 
+
+class Pong(process):
+    def setup(name):
+        self.total_pings = 1
+
+    def run():
+        await(total_pings == 0)
+
+    def receive(msg=('Ping',), from_=p):
+        output("Pinged")
+        time.sleep(4)
+        send(('Pong',), to=p)
+        self.total_pings -= 1
+
+class Ping(process):
+    def setup(p:Pong, nrounds:int): pass
+
+    def run():
+        for i in range(nrounds):
+            clk = logical_clock()
+            send(('Ping',), to=p)
+            if await(some(received(('Pong',), clk=rclk), has=(rclk > clk))):
+                output("YASSS")
+            elif timeout(2):
+                output("FAAKED")
+
+    def receive(msg=('Pong',)):
+        output("Ponged.")
+
+def main():
+    nrounds = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    npings = int(sys.argv[2]) if len(sys.argv) > 2 else 1
+    config(clock='Lamport')
+    #pong = new(Pong, [nrounds * npings], num= 1)
+    pong = new(Pong, num= 1)
+    ping = new(Ping, num= 1)
+    setup(ping, (pong, nrounds))
+    setup(pong, ("amith",))
+    time.sleep(1)
+    start(pong)
+    start(ping)
