@@ -4,16 +4,48 @@ import string
 import hashlib
 
 
-#receive request from client
-#check if config is null or not
-#if it is null
-#call the configuration object
+class Configuration:
+    def __init__(self, servers, public_keys):
+        self.servers = servers
+        self.public_keys = public_keys
+
 class Olympus(process):
-    def setup():
-        pass
+    def setup(name):
+        self.name = name
+        self.current_configuration = 0
+        self.terminate = -1
   
     def run():
-        pass
+        await(self.terminate == 1)
+
+    def setup_new_configuration(client):
+        num_replicas = 7
+        servers = new(Replica, num=num_replicas)
+        public_keys = []
+        for s in range(0, len(servers)):
+            private_key, public_key = generate_keys()
+            public_keys.append(public_key)
+            if s == 0:
+                setup(list(servers)[s], (("null", list(servers)[1]), client, "head", private_key, public_key))
+            elif s == len(servers)-1:
+                setup(list(servers)[s], ((list(servers)[s-1], "null"), client, "tail", private_key, public_key))
+            else:
+                setup(list(servers)[s], ((list(servers)[s-1], list(servers)[s+1]), client, "replica", private_key, public_key))
+
+        con = Configuration(servers, public_keys)
+        self.current_configuration = con
+        start(servers)
+        output("Servers started !!")
+        output(servers)
+        return con
+    
+    def receive(msg=('startup', c), from_=client):
+        if self.current_configuration == 0:
+            new_con = self.setup_new_configuration(client)
+            send(('init_config', new_con, self.id), to=client)
+        else:
+            exist_con = self.current_configuration
+            send(('exist_config', exist_con, self.id), to=client)
 
 
 class BankAccount:
@@ -139,17 +171,32 @@ class Replica(process):
             return res    
    
 class Client(process):
-    def setup(servers):
-	    pass
-
+    def setup(olympus):
+        self.olympus = olympus
+        self.configuration = 0
+        self.terminate = 0
+    
     def run():
-        res=0
-        output("sending command from client to the head of the replicas")
-        output(self.servers[0])
-        send(('newm', 'create amith 250'), to=self.servers[0])
-        await(some(received(('result', res_proof, res, p)), has = p == servers[len(servers)-1]))
+        if self.configuration == 0:
+             send(('startup', self.id), to=olympus)
+             await(some(received(('init_config', con, o)), has = o == self.olympus))
+             output("Received configuration successfully from the olympus")
+             self.send_requests()
+
+    def send_requests():
+        output("Servers")
+        output(self.configuration.servers)
+        s = list(self.configuration.servers)
+        output("sending command from client to the head of the replicas") 
+        output(s[0])
+        send(('newm', 'create amith 250'), to=s[0])
+        await(some(received(('result', res_proof, res, p)), has = p == s[len(s)-1]))
         output("Result received from the tail ", res)
-        #send(('Done',), to=parent())
+
+
+    def receive(msg=('init_config', con, o), from_=olympus):
+        output("New configuration received from olympus")
+        self.configuration = con
 
     def receive(msg=('result', res_proof, res, p), from_=sender):
         output("Result Proof received from the tail ", res_proof)
@@ -159,27 +206,13 @@ def generate_keys():
     public_key = ''.join(random.choices(string.ascii_letters + string.digits, k=5)) 
     return private_key, public_key
 
+
 def main():
-    num_replicas = 7
-    num_clients = 1
-    servers = new(Replica, num=num_replicas)
-    clients = new(Client, num=num_clients)
+    olympus = new(Olympus, num=1)
+    clients = new(Client, num=1)
     
-    for s in range(0, len(servers)):
-        private_key, public_key = generate_keys()
-        if s == 0:
-            setup(list(servers)[s], (("null", list(servers)[1]), list(clients)[0], "head", private_key, public_key))
-        elif s == len(servers)-1:
-            setup(list(servers)[s], ((list(servers)[s-1], "null"), list(clients)[0], "tail", private_key, public_key))
-        else:
-            setup(list(servers)[s], ((list(servers)[s-1], list(servers)[s+1]), list(clients)[0], "replica", private_key, public_key))
+    setup(olympus, ("olympus",))
+    setup(clients, (list(olympus)[0],))
 
-
-    setup(clients, (list(servers),))
-    start(servers)
-    output("Servers started !!")
-    output(servers)
+    start(olympus)
     start(clients)
-    output("Clients started !!")
-    await(received(('Done',)))
-    end(servers)
