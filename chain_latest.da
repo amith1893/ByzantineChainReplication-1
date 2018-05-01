@@ -1,0 +1,336 @@
+import time
+import random
+import string
+import hashlib
+import sys
+
+class Configuration:
+    def __init__(self, servers, public_keys):
+        self.servers = servers
+        self.public_keys = public_keys
+
+class Olympus(process):
+    def setup(name, num_rep):
+        self.name = name
+        self.current_configuration = 0
+        self.terminate = -1
+        self.wedge_response = {}
+        self.num_replicas = num_rep
+        self.received_reconfiguration_request = 0
+  
+    def run():
+        await(self.terminate == 1)
+
+    def setup_new_configuration(client):
+        num_replicas = self.num_replicas
+        servers = new(Replica, num=num_replicas)
+        head = list(servers)[0]
+        public_keys = []
+        for s in range(0, len(servers)):
+            private_key, public_key = generate_keys()
+            public_keys.append(public_key)
+            if s == 0:
+                setup(list(servers)[s], (("null", list(servers)[1]), client, "head", private_key, public_key, head, self))
+            elif s == len(servers)-1:
+                setup(list(servers)[s], ((list(servers)[s-1], "null"), client, "tail", private_key, public_key, head, self))
+            else:
+                setup(list(servers)[s], ((list(servers)[s-1], list(servers)[s+1]), client, "replica", private_key, public_key, head, self))
+
+        con = Configuration(servers, public_keys)
+        self.current_configuration = con
+        start(servers)
+        output("Servers started !!")
+        output(servers)
+        return con
+    
+    def receive(msg=('startup', c), from_=client):
+        if self.current_configuration == 0:
+            new_con = self.setup_new_configuration(client)
+            send(('init_config', new_con, self.id), to=client)
+        else:
+            exist_con = self.current_configuration
+            send(('exist_config', exist_con, self.id), to=client)
+
+    def find_longest_history():
+        return []
+
+    def receive(msg=('reconfigure', rid), from_=replica):
+        if self.received_reconfiguration_request == 0:
+            output("Received reconfiguration_request the first time")
+            self.received_reconfiguration_request = 1
+            self.wedge_response = {}
+            con_obj = self.current_configuration
+            num_replicas = len(con_obj.servers)
+            for s in con_obj.servers:
+                send(('wedge',), to=s)
+            await(len(setof(p, received(('wedge_response', w_resp, p), from_=p))) > num_replicas/2)
+            output("Got quorum of wedge responses")
+            longest_history = self.find_longest_history()
+        else:
+            output("Already received reconfiguration request from a replica. Ignoring this request")
+                       
+    def receive(msg=('wedge_response', wedge_data, rid), from_=replica):
+        output("Wedge response sent by the replica ", rid)
+        if rid not in self.wedge_response:
+            self.wedge_response[rid] = wedge_data
+
+class BankAccount:
+    def __init__(self, name, account_id):
+        self.name = name
+        self.account_id = account_id
+        self.balance = 0
+        self.num_deposits = 0
+        self.num_withdrawals = 0
+
+    def deposit(self, amount):    
+        self.num_deposits += 1
+        self.balance += amount
+
+    def withdraw(self, amount):
+        self.num_withdrawals += 1
+        self.balance -= amount
+   
+    def getBalance(self):
+        return self.balance
+
+    def getAccountId(self):
+        return self.account_id
+
+    def getAccountName(self):
+        return self.name
+
+
+class Replica(process):
+    def setup(neighbours, client, name, private_key, public_key, head, olympus):
+        self.predecessor = neighbours[0]
+        self.successor = neighbours[1]
+        self.head = head
+        self.olympus = olympus
+        self.name = name
+        self.history = {}
+        self.client = client
+        self.terminate = 0
+        self.unverified = []
+        self.input_set = []
+        self.output_set = []
+        self.private_key = private_key
+        self.public_key = public_key
+        self.slot = 0
+        self.bank_accounts = {}
+        self.state = "ACTIVE"
+    
+    def run():
+        await(self.terminate == -1)
+    
+    def receive(msg=('rshuttle', action, r, id), from_=sender):
+        if self.name == 'replica' and self.state == "ACTIVE":
+            self.history[action] = [r["order_proof"], r["result_proof"], r["result"]]
+        elif self.name == 'head' and self.state == "ACTIVE":
+            self.history[action] = [r["order_proof"], r["result_proof"], r["result"]]
+            
+    def receive(msg=('fshuttle', action, l, id), from_=sender):
+        if self.name == 'replica' and self.state == "ACTIVE":
+            res = self.evaluate(action)
+            oproof = [self.slot, action, self.id]
+            rproof = [res, action, hashlib.sha224(res.encode('utf-8')).hexdigest(), self.id]
+            l["order_proof"].append(oproof)
+            l["result_proof"].append(rproof)
+            self.slot += 1
+            send(('fshuttle', action, l, self.id), to=self.successor)
+            await(some(received(('rshuttle', action, r, id)), has = id == self.successor))
+            send(('rshuttle', action, r, self.id), to=self.predecessor)
+        elif self.name == 'tail' and self.state == "ACTIVE":
+            res = self.evaluate(action)
+            oproof = [self.slot, action, self.id]
+            rproof = [res, action, hashlib.sha224(res.encode('utf-8')).hexdigest(), self.id]
+            l["order_proof"].append(oproof)
+            l["result_proof"].append(rproof)
+            self.slot += 1
+            send(('result', l["result_proof"], res, self.id), to=self.client)
+            r = {"order_proof": l["order_proof"], "result_proof": l["result_proof"], "action":action, "result": res}
+            self.history[action] = [l["order_proof"], l["result_proof"], res]
+            #output("Reached tail ACTION : ", action, "RESULT : ", res)
+            send(('result', r, r["result"], self.id), to=self.client)
+            output("Time now ", time.time())
+            send(('rshuttle', action, r, self.id), to=self.predecessor)
+        elif self.state == "IMMUTABLE":
+            output("The replica is immutable. Cannot do anything about it")
+         
+    def receive(msg=('newm', action), from_=sender):
+        if self.name == 'head' and self.state == "ACTIVE":
+            #time.sleep(10)
+            res = self.evaluate(action)
+            l = {"action": action, "order_proof":[], "result_proof":[]}
+            oproof = [self.slot, action, self.id]
+            rproof = [res, action, hashlib.sha224(res.encode('utf-8')).hexdigest(), self.id]
+            l["order_proof"].append(oproof)
+            l["result_proof"].append(rproof)
+            self.slot += 1
+            send(('fshuttle', action, l, self.id), to=self.successor)
+            await(some(received(('rshuttle', action, r, id)), has = id == self.successor))
+            #output("Received Result Proof from the successor ", self.successor, " Will not send the result proof to the client as the tail has already sent", self.client)
+            #output("Result Proof as received by the head by it's successor   ", r)
+            #output("Result Proof is received by the head by it's successor")
+        else:
+            send(('direct_response', "null", "immutable", self.id), to=client)
+
+    def receive(msg=('direct', action, id), from_=client):
+        if self.state == "ACTIVE" and self.name != 'head':
+            #output("Received direct request here ", self.id, " from ", client)
+            if action in self.history:
+                send(('direct_response', self.history["action"][1], self.history["action"][2], self.id), to=client)
+            else:
+                send(('indirect', action, self.id), to=self.head)
+                if await(some(received(('indirect_response', res_proof, p)), has = p == self.head)):
+                    if self.state == "ACTIVE":
+                        output("Obtained response from the Head for the retransmitting message. Sending the received result proof and the result to the client now")
+                        send(('direct_response', res_proof, res_proof["result"], self.id), to=client)
+                    else:
+                        output("Immutable maaaaaaan")
+                        send(('direct_response', "null", "immutable", self.id), to=client)
+                elif timeout(2):
+                    output("Timeout has occurred")
+                    self.state = "IMMUTABLE"
+                    self.handle_reconfiguration()
+        else:
+            send(('direct_response', "null", "immutable", self.id), to=client)
+
+    def receive(msg=('indirect_response', r, id), from_=predecessor):
+        output("Obtained the indirect response from ", predecessor, " at ", self.id)
+               
+    def handle_reconfiguration():
+        send(('reconfigure', self.id), to=self.olympus)
+        await(some(received(('wedge', o)), has = o == self.olympus))
+        output("Received Wedge command from the Olympus. State of the replica now is ", self.state)
+        send(('wedge_response', self.history, self.id), to=self.olympus)
+ 
+    def receive(msg=('indirect', action, id), from_=replica):
+        if self.name == 'head' and self.state == "ACTIVE":
+            if action in self.history:
+                send(('indirect_response', self.history['action'][2], self.id), to=replica)
+            if await(some(received(('rshuttle', action, r, id)), has = id == self.successor)):
+                send(('indirect_response', r, self.id), to=replica)
+            elif timeout(2):
+                output("Timed out at head to receive the result proof")
+                #self.handle_reconfiguration() 
+
+    def receive(msg=('wedge', o), from_=olympus):
+        #self.state = "IMMUTABLE"
+        output("State is set to Immutable")
+ 
+    def evaluate(action):
+        op = action.split()
+        action = op[0]
+        param = op[1]
+        account_id = 0
+        if op[0] == 'create':
+            account_id = op[2]
+            b = BankAccount(op[1], account_id)
+            if account_id not in self.bank_accounts.keys():
+                self.bank_accounts[account_id] = b
+                res = "Bank Account " + account_id + " created"
+                return res
+            else:
+                return "Already present. Cannot be created"
+        elif op[0] == 'deposit':
+            self.bank_accounts[param].deposit(float(op[2]))
+            res = str(op[2]) + " deposited in " + op[1]
+            return res
+        elif op[0] == 'withdraw':
+            val = self.bank_accounts[param].getBalance() - float(op[2])
+            res = ""
+            if val < 0:
+                res = "Withdrawal not possible"
+            else:
+                self.bank_accounts[param].withdraw(float(op[2]))
+                res = "Withdrawal of " + op[2] + " from " + op[1] + " successful"
+            return res
+        elif op[0] == 'balance':
+            bal = self.bank_accounts[param].getBalance()
+            res = "Balance of account " + param + " is " + bal
+            return res
+        elif op[0] == 'transfer':
+            sender = op[1]
+            receiver = op[2]
+            amount = op[3]
+            self.bank_accounts[sender].withdraw(float(amount))
+            self.bank_accounts[receiver].deposit(float(amount))
+            return "Transfer of " + amount + " successful from " + sender + " to " + receiver
+                 
+   
+class Client(process):
+    def setup(olympus, input_file):
+        self.olympus = olympus
+        self.configuration = 0
+        self.terminate = 0
+        f = open(input_file, 'r')
+        self.commands = f.readlines()
+    
+    def run():
+        if self.configuration == 0:
+             send(('startup', self.id), to=olympus)
+             await(some(received(('init_config', con, o)), has = o == self.olympus))
+             output("Received configuration successfully from the olympus")
+             self.send_requests()
+
+    def send_requests():
+        output("Servers")
+        output(self.configuration.servers)
+        s = list(self.configuration.servers)
+        output("sending command from client to the head of the replicas") 
+        output(s[0])
+        action = 'create amith 250'
+        t = time.time()
+        for c in self.commands:
+            #send(('newm', action), to=s[0])
+            send(('newm', c), to=s[0])
+            #output("ACTION is ", c)
+            if await(some(received(('result', res_proof, res, p)), has = p == s[len(s)-1])):
+                #output("RES ", res)
+                t = 0
+                #output("Result received from the tail ")
+            #elif timeout(5):
+            #    output("Request operation timed out. Sending the direct request to all the replicas")
+            #    for server in s:
+            #        send(('direct', c, self.id), to=server)
+            #    await(len(setof(p, received(('direct_response', resp, p), from_=p))) == len(s))
+            #    output("Direct response received from all the replicas")
+       
+        newt = time.time()
+        diff = newt - t
+        output("Time taken ", diff)
+        end(self.configuration.servers) 
+        send(('Done',), to=parent()) 
+
+    def receive(msg=('direct_response', res_proof, res, dr), from_=sender):
+        output("Received response ", res, " from ", sender) 
+ 
+    def receive(msg=('init_config', con, o), from_=olympus):
+        #output("New configuration received from olympus")
+        self.configuration = con
+
+    def receive(msg=('result', res_proof, res, p), from_=sender):
+        #output("Result Proof received from the tail ", res_proof)
+        #output("Result Proof is received from the tail. Result is ", res_proof["result"])
+        #output("Result Proof is received RES ", res)
+        pass
+
+def generate_keys():
+    private_key = ''.join(random.choices(string.ascii_letters + string.digits, k=5)) 
+    public_key = ''.join(random.choices(string.ascii_letters + string.digits, k=5)) 
+    return private_key, public_key
+
+
+def main():
+    num_replicas = int(sys.argv[1])
+    filename = sys.argv[2]
+    olympus = new(Olympus, num=1)
+    clients = new(Client, num=1)
+    
+    setup(olympus, ("olympus", num_replicas))
+    setup(clients, (list(olympus)[0], filename))
+
+    start(olympus)
+    start(clients)
+    await(received(('Done',)))
+    
